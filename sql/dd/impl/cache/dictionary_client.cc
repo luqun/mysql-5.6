@@ -2143,6 +2143,7 @@ bool Dictionary_client::foreach (
         if (sub_trx.otx.open_tables()) {
           assert(m_thd->is_system_thread() || m_thd->killed ||
                  m_thd->is_error());
+          assert(false);
           return true;
         }
 
@@ -2150,6 +2151,7 @@ bool Dictionary_client::foreach (
                                                      &new_object)) {
           assert(m_thd->is_system_thread() || m_thd->killed ||
                  m_thd->is_error());
+          assert(false);
           return true;
         }
       }
@@ -2165,12 +2167,14 @@ bool Dictionary_client::foreach (
         if (object.get() == nullptr) {
           delete new_object;
         } else if (processor(object)) {
+          assert(false);
           return true;
         }
       }
 
       if (rs->next(r)) {
         assert(m_thd->is_system_thread() || m_thd->killed || m_thd->is_error());
+        assert(false);
         return true;
       }
     }

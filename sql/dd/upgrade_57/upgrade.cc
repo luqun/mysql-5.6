@@ -856,6 +856,27 @@ bool do_pre_checks_and_initialize_dd(THD *thd) {
                        &not_used);
   bool exists_plugin_frm = (!my_access(path, F_OK));
 
+  // Find out which se contains dd_properties table
+  // If a SE contains dd_properties table, assume that SE is DDSE
+  bool use_rocksdb_ddse = false;
+  {
+    handlerton *rocksdb_ddse = ha_resolve_by_legacy_type(thd, DB_TYPE_ROCKSDB);
+    int error = HA_ERR_NO_SUCH_TABLE;
+    if (rocksdb_ddse != nullptr) {
+      error = rocksdb_ddse->table_exists_in_engine(
+          rocksdb_ddse, thd, MYSQL_SCHEMA_NAME.str, "dd_properties");
+    }
+
+    if (error == HA_ERR_TABLE_EXIST) {
+      use_rocksdb_ddse = true;
+      bootstrap::DD_bootstrap_ctx::instance().set_actual_dd_engine(
+          DB_TYPE_ROCKSDB);
+    } else {
+      bootstrap::DD_bootstrap_ctx::instance().set_actual_dd_engine(
+          DB_TYPE_INNODB);
+    }
+  }
+
   /*
     If mysql.ibd and mysql/plugin.frm do not exist,
     this is neither a restart nor an in-place upgrade case.
@@ -863,7 +884,7 @@ bool do_pre_checks_and_initialize_dd(THD *thd) {
     Server restart is not possible without mysql.ibd.
     Exit with an error.
   */
-  if (!exists_mysql_tablespace && !exists_plugin_frm) {
+  if (!exists_mysql_tablespace && !exists_plugin_frm && !use_rocksdb_ddse) {
     LogErr(ERROR_LEVEL, ER_DD_UPGRADE_FAILED_FIND_VALID_DATA_DIR);
     return true;
   }

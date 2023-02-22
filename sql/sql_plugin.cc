@@ -27,6 +27,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <cassert>
 
 #include "m_ctype.h"
 #include "m_string.h"
@@ -1622,9 +1623,9 @@ bool plugin_register_builtin_and_init_core_se(int *argc, char **argv) {
           plugin_initialize(plugin_ptr))
         goto err_unlock;
 
-      if (is_rocksdb && default_dd_storage_engine == DEFAULT_DD_ROCKSDB)
+      if (is_rocksdb && default_dd_storage_engine == DEFAULT_DD_ROCKSDB) {
         rocksdb_loaded = plugin_ptr->state == PLUGIN_IS_READY;
-
+      }
       /*
         Initialize the global default storage engine so that it may
         not be null in any child thread.
@@ -3264,8 +3265,12 @@ static int construct_options(MEM_ROOT *mem_root, st_plugin_int *tmp,
       (char *)mem_root->Alloc(plugin_name_len + plugin_dash.length + 1);
   strxmov(plugin_name_with_prefix_ptr, plugin_dash.str, plugin_name_ptr, NullS);
 
-  if (tmp->load_option != PLUGIN_FORCE &&
-      tmp->load_option != PLUGIN_FORCE_PLUS_PERMANENT) {
+  // in production, we always pass --rocksdb if it is a rocksdb instance
+  // we may don't need this workaround if we enable rocksdb DD and remove
+  // --rocksdb at same time
+  if ((tmp->load_option != PLUGIN_FORCE &&
+       tmp->load_option != PLUGIN_FORCE_PLUS_PERMANENT) ||
+      (strcmp(plugin_name, "ROCKSDB") == 0)) {
     /* support --skip-plugin-foo syntax */
     options[0].name = plugin_name_ptr;
     options[1].name = plugin_name_with_prefix_ptr;

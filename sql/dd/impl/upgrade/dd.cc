@@ -54,6 +54,7 @@
 #include "sql/dd/types/schema.h"
 #include "sql/sd_notify.h"  // sysd::notify
 #include "sql/sql_class.h"  // THD
+#include "sql/sql_table.h"  // build_table_filename
 #include "sql/table.h"      // MYSQL_SCHEMA_NAME
 
 namespace dd {
@@ -1031,13 +1032,69 @@ bool update_object_ids(THD *thd, const std::set<String_type> &create_set,
 }
 /* purecov: end */
 
+bool upgrade_dd_properties_table(THD *thd, Object_id mysql_schema_id,
+                                 Object_id target_table_schema_id,
+                                 const String_type &target_table_schema_name,
+                                 Object_id actual_table_schema_id) {
+  if (!bootstrap::DD_bootstrap_ctx::instance().is_dd_engine_change())
+    return false;
+
+  // create <upgrade>.dd_properties with default_ddse
+  dd::tables::DD_properties::instance().set_engine(
+      default_dd_storage_engine == enum_dd_default_engine::DEFAULT_DD_INNODB
+          ? String_type("INNODB")
+          : String_type("ROCKSDB"));
+  const Object_table_definition *dd_properties_def =
+      dd::tables::DD_properties::instance().target_table_definition();
+  if (dd::execute_query(thd, dd_properties_def->get_ddl())) {
+    assert(false);
+    return dd::end_transaction(thd, true);
+  }
+
+  // copy data from mysql.dd_properties to <upgrade>.dd_properties
+  std::stringstream ss;
+  ss << "INSERT INTO dd_properties SELECT * FROM " << MYSQL_SCHEMA_NAME.str
+     << "."
+     << "dd_properties";
+  if (dd::execute_query(thd, ss.str().c_str())) {
+    assert(false);
+    return dd::end_transaction(thd, true);
+  }
+
+  // rename <upgrade>.dd_properties to mysql.dd_properties
+  std::set<String_type> dd_properties_create({"dd_properties"});
+  if (update_object_ids(thd, dd_properties_create, dd_properties_create,
+                        mysql_schema_id, target_table_schema_id,
+                        target_table_schema_name, actual_table_schema_id)) {
+    assert(false);
+    return true;
+  }
+  dd::end_transaction(thd, false);
+
+  handlerton *rocksdb_ddse = ha_resolve_by_legacy_type(thd, DB_TYPE_ROCKSDB);
+  auto handler = get_new_handler(nullptr, false, thd->mem_root, rocksdb_ddse);
+  char lc_from[FN_REFLEN + 1];
+  char lc_to[FN_REFLEN + 1];
+  build_table_filename(lc_from, sizeof(lc_from) - 1,
+                       target_table_schema_name.c_str(), "dd_properties", "",
+                       0);
+  build_table_filename(lc_to, sizeof(lc_to) - 1, MYSQL_SCHEMA_NAME.str,
+                       "dd_properties", "", 0);
+  handler->ha_rename_table(lc_from, lc_to, nullptr, nullptr);
+  destroy(handler);
+
+  return false;
+}
+
 }  // namespace
 
 namespace upgrade {
 // Create the target tables for upgrade and migrate the meta data.
 /* purecov: begin inspected */
 bool upgrade_tables(THD *thd) {
-  if (!bootstrap::DD_bootstrap_ctx::instance().is_dd_upgrade()) return false;
+  if (!bootstrap::DD_bootstrap_ctx::instance().is_dd_upgrade() &&
+      !bootstrap::DD_bootstrap_ctx::instance().is_dd_engine_change())
+    return false;
 
   /*
     Create the temporary schemas used for target and actual tables,
@@ -1050,6 +1107,14 @@ bool upgrade_tables(THD *thd) {
   if (create_temporary_schemas(thd, &mysql_schema_id, &target_table_schema_id,
                                &target_table_schema_name,
                                &actual_table_schema_id))
+    return true;
+
+  /*
+    Upgrade dd_properties table during ddse change(innodb->rocksdb, vice verse)
+  */
+  if (upgrade_dd_properties_table(thd, mysql_schema_id, target_table_schema_id,
+                                  target_table_schema_name,
+                                  actual_table_schema_id))
     return true;
 
   /*
@@ -1156,8 +1221,12 @@ bool upgrade_tables(THD *thd) {
   Object_table_definition_impl::set_dd_tablespace_encrypted(false);
 
   // Reset the DDSE local dictionary cache.
-  handlerton *ddse = get_dd_engine(thd);
-  if (ddse->dict_cache_reset == nullptr) return true;
+  handlerton *ddse = ha_resolve_by_legacy_type(
+      thd, bootstrap::DD_bootstrap_ctx::instance().get_actual_dd_engine());
+  if (ddse->dict_cache_reset == nullptr) {
+    assert(false);
+    return true;
+  }
 
   for (System_tables::Const_iterator it =
            System_tables::instance()->begin(System_tables::Types::CORE);
@@ -1168,6 +1237,34 @@ bool upgrade_tables(THD *thd) {
     ddse->dict_cache_reset(target_table_schema_name.c_str(),
                            (*it)->entity()->name().c_str());
   }
+
+  // when there is only 1 ddse, the following initialize_dd_properties()
+  // will innodb reset/clear dd_table_ids;
+  // when there are > 1 ddse, the following initialize_dd_properties()()
+  // will only clear one ddse dd_table_ids instead of all.
+  // manually clear all ddse dd table ids
+  ddse->dict_dd_table_ids_reset();
+  if (bootstrap::DD_bootstrap_ctx::instance().is_dd_engine_change()) {
+    handlerton *rocksdb_ddse = ha_resolve_by_legacy_type(thd, DB_TYPE_ROCKSDB);
+    auto handler = get_new_handler(nullptr, false, thd->mem_root, rocksdb_ddse);
+    for (std::set<String_type>::const_iterator it = create_set.begin();
+         it != create_set.end(); ++it) {
+      char lc_from[FN_REFLEN + 1];
+      char lc_to[FN_REFLEN + 1];
+      build_table_filename(lc_from, sizeof(lc_from) - 1,
+                           target_table_schema_name.c_str(), (*it).c_str(), "",
+                           0);
+      build_table_filename(lc_to, sizeof(lc_to) - 1, MYSQL_SCHEMA_NAME.str,
+                           (*it).c_str(), "", 0);
+      handler->ha_rename_table(lc_from, lc_to, nullptr, nullptr);
+      // handler->ha_close();
+    }
+    // handler->ha_commit_low();
+    rocksdb_ddse->commit(rocksdb_ddse, thd, true);
+    destroy(handler);
+  }
+  if (dd::execute_query(thd, "set global rocksdb_force_flush_memtable_now=1"))
+    return true;
 
   /*
     We need to start over DD initialization. This is done by executing the

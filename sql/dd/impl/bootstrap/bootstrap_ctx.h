@@ -131,8 +131,8 @@ class DD_bootstrap_ctx {
   }
 
   void set_actual_dd_engine(enum legacy_db_type actual_dd_engine) {
-    assert(m_actual_dd_engine == DB_TYPE_UNKNOWN ||
-           m_actual_dd_engine == actual_dd_engine);
+    // assert(m_actual_dd_engine == DB_TYPE_UNKNOWN ||
+    //       m_actual_dd_engine == actual_dd_engine);
     m_actual_dd_engine = actual_dd_engine;
   }
 
@@ -140,14 +140,14 @@ class DD_bootstrap_ctx {
 
   uint get_actual_I_S_version() const { return m_actual_I_S_version; }
 
-  uint get_actual_dd_engine() const {
+  legacy_db_type get_actual_dd_engine() const {
     assert(m_actual_dd_engine != DB_TYPE_UNKNOWN);
     return m_actual_dd_engine;
   }
 
   void set_dd_upgrade_done() {
     assert(m_did_dd_upgrade_from == 0);
-    assert(is_dd_upgrade());
+    assert(is_dd_upgrade() || is_dd_engine_change());
     m_did_dd_upgrade_from = m_actual_dd_version;
   }
 
@@ -186,7 +186,8 @@ class DD_bootstrap_ctx {
 
   bool is_restart() const {
     return !opt_initialize && (m_actual_dd_version == dd::DD_VERSION) &&
-           (m_upgraded_server_version == MYSQL_VERSION_ID);
+           (m_upgraded_server_version == MYSQL_VERSION_ID) &&
+           !is_dd_engine_change();
   }
 
   bool is_dd_upgrade() const {
@@ -223,6 +224,12 @@ class DD_bootstrap_ctx {
 
   bool is_initialize() const {
     return opt_initialize && (m_actual_dd_version == dd::DD_VERSION);
+  }
+  bool is_dd_engine_change() const {
+    return !opt_initialize &&
+           (m_actual_dd_engine !=
+            (default_dd_storage_engine == DEFAULT_DD_INNODB ? DB_TYPE_INNODB
+                                                            : DB_TYPE_ROCKSDB));
   }
 };
 

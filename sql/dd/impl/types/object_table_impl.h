@@ -123,6 +123,11 @@ class Object_table_impl : virtual public Object_table {
 
   void set_hidden(bool hidden) override { m_hidden = hidden; }
 
+  void set_engine(const String_type &engine) {
+    m_target_def.update_option(static_cast<int>(Common_option::ENGINE),
+                               "ENGINE", String_type("ENGINE=") + engine);
+  }
+
   ~Object_table_impl() override = default;
 };
 

@@ -7713,15 +7713,22 @@ static int rocksdb_init_internal(void *const p) {
   rocksdb_hton->clone_interface.clone_apply = rocksdb_clone_apply;
   rocksdb_hton->clone_interface.clone_apply_end = rocksdb_clone_apply_end;
 
-  rocksdb_hton->dict_register_dd_table_id = rocksdb_dict_register_dd_table_id;
+  // DD func
+  rocksdb_hton->dict_cache_reset = rocksdb_dict_cache_reset;
+  rocksdb_hton->dict_cache_reset_tables_and_tablespaces =
+      rocksdb_dict_cache_reset_tables_and_tablespaces;
+  rocksdb_hton->ddse_dict_init = rocksdb_ddse_dict_init;
   rocksdb_hton->dict_get_server_version = rocksdb_dict_get_server_version;
   rocksdb_hton->dict_set_server_version = rocksdb_dict_set_server_version;
+  rocksdb_hton->dict_recover = rocksdb_dict_recover;
+  rocksdb_hton->dict_register_dd_table_id = rocksdb_dict_register_dd_table_id;
+  rocksdb_hton->finish_upgrade = rocksdb_dd_upgrade_finish;
+  rocksdb_hton->is_dict_readonly = rocksdb_is_dict_readonly;
   rocksdb_hton->is_supported_system_table = rocksdb_is_supported_system_table;
-  rocksdb_hton->ddse_dict_init = rocksdb_ddse_dict_init;
+  rocksdb_hton->upgrade_space_version = rocksdb_upgrade_space_version;
   rocksdb_hton->table_exists_in_engine = rocksdb_table_exists_in_engine;
 
   rocksdb_hton->flags = HTON_SUPPORTS_EXTENDED_KEYS | HTON_CAN_RECREATE;
-
   rocksdb_hton->partition_flags = rocksdb_partition_flags;
 
   if (rocksdb_db_options->max_open_files > (long)open_files_limit) {
@@ -19390,8 +19397,6 @@ static bool parse_fault_injection_params(
 }
 
 bool ha_rocksdb::get_se_private_data(dd::Table *, bool reset) {
-  // TODO: Remove the assert once we fully migrate to using RocksDB DD API.
-  assert(false);
   if (reset) {
     native_dd::clear_dd_table_ids();
   }

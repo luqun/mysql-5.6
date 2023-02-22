@@ -86,6 +86,7 @@ class Tablespace_filename_error_handler : public Internal_error_handler {
                         const char *) override {
     if (sql_errno == ER_DUP_ENTRY) {
       my_error(ER_TABLESPACE_DUP_FILENAME, MYF(0), name);
+      assert(false);
       return true;
     }
     return false;

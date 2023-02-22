@@ -11596,6 +11596,9 @@ ER_IB_SLOWRM_CREATE_DIR
 ER_IB_SLOWRM_MOVE_FILE
   eng "%s"
 
+ER_DDSE_CHANGE
+  eng "MySQL DDSE changing from '%s' to '%s'."
+
 # DO NOT add server-to-client messages here;
 # they go in messages_to_clients.txt
 # in the same directory as this file.

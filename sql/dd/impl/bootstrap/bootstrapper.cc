@@ -82,11 +82,23 @@ namespace {
 // Initialize recovery in the DDSE.
 bool DDSE_dict_recover(THD *thd, dict_recovery_mode_t dict_recovery_mode,
                        uint version) {
-  handlerton *ddse = get_dd_engine(thd);
-  if (ddse->dict_recover == nullptr) return true;
+  handlerton *ddse = nullptr;
 
+  if (opt_initialize) {
+    ddse = get_dd_engine(thd);
+  } else {
+    ddse = ha_resolve_by_legacy_type(
+        thd, bootstrap::DD_bootstrap_ctx::instance().get_actual_dd_engine());
+  }
+
+  if (ddse->dict_recover == nullptr) return true;
   bool error = ddse->dict_recover(dict_recovery_mode, version);
 
+  if (ddse->db_type != DB_TYPE_INNODB) {
+    ddse = ha_resolve_by_legacy_type(thd, DB_TYPE_INNODB);
+    if (ddse->dict_recover == nullptr) return true;
+    error = ddse->dict_recover(dict_recovery_mode, version);
+  }
   /*
     Commit when tablespaces have been initialized, since in that
     case, tablespace meta data is added.
@@ -725,7 +737,14 @@ namespace bootstrap {
   predefined tables and tablespaces.
 */
 bool DDSE_dict_init(THD *thd, dict_init_mode_t dict_init_mode, uint version) {
-  handlerton *ddse = get_dd_engine(thd);
+  handlerton *ddse = nullptr;
+
+  if (opt_initialize) {
+    ddse = get_dd_engine(thd);
+  } else {
+    ddse = ha_resolve_by_legacy_type(
+        thd, bootstrap::DD_bootstrap_ctx::instance().get_actual_dd_engine());
+  }
 
   /*
     The lists with element wrappers are mem root allocated. The wrapped
@@ -738,6 +757,16 @@ bool DDSE_dict_init(THD *thd, dict_init_mode_t dict_init_mode, uint version) {
       ddse->ddse_dict_init(dict_init_mode, version, &ddse_tables,
                            &ddse_tablespaces))
     return true;
+
+  // always initialize innodb
+  if (ddse->db_type != DB_TYPE_INNODB) {
+    ddse_tablespaces.clear();
+    handlerton *innodb_ddse = ha_resolve_by_legacy_type(thd, DB_TYPE_INNODB);
+    if (innodb_ddse->ddse_dict_init == nullptr ||
+        innodb_ddse->ddse_dict_init(dict_init_mode, version, &ddse_tables,
+                                    &ddse_tablespaces))
+      return true;
+  }
 
   /*
     Iterate over the table definitions and add them to the System_tables
@@ -1085,10 +1114,12 @@ bool initialize_dd_properties(THD *thd) {
           dd::tables::DD_properties::instance().name().c_str());
     }
     if (error == HA_ERR_TABLE_EXIST) {
+      dd::tables::DD_properties::instance().set_engine(String_type("ROCkSDB"));
       // actual ddse maybe rocksdb
       bootstrap::DD_bootstrap_ctx::instance().set_actual_dd_engine(
           DB_TYPE_ROCKSDB);
     } else {
+      dd::tables::DD_properties::instance().set_engine(String_type("INNODB"));
       // actual ddse maybe innodb
       bootstrap::DD_bootstrap_ctx::instance().set_actual_dd_engine(
           DB_TYPE_INNODB);
@@ -1223,7 +1254,7 @@ bool initialize_dd_properties(THD *thd) {
   else {
     /*
       If none of the above, then this must be DD upgrade or server
-      upgrade, or both.
+      upgrade, or DD engine change.
     */
     if (bootstrap::DD_bootstrap_ctx::instance().is_dd_upgrade()) {
       LogErr(SYSTEM_LEVEL, ER_DD_UPGRADE, actual_version, dd::DD_VERSION);
@@ -1239,8 +1270,19 @@ bool initialize_dd_properties(THD *thd) {
       LogErr(INFORMATION_LEVEL, ER_SERVER_UPGRADE_FROM_VERSION,
              upgraded_server_version, MYSQL_VERSION_ID);
     }
+
+    if (bootstrap::DD_bootstrap_ctx::instance().is_dd_engine_change()) {
+      LogErr(INFORMATION_LEVEL, ER_DDSE_CHANGE,
+             bootstrap::DD_bootstrap_ctx::instance().get_actual_dd_engine() ==
+                     DB_TYPE_INNODB
+                 ? "INNODB"
+                 : "ROCKSDB",
+             default_dd_storage_engine == DEFAULT_DD_INNODB ? "INNODB"
+                                                            : "ROCKSDB");
+    }
     assert(bootstrap::DD_bootstrap_ctx::instance().is_dd_upgrade() ||
-           bootstrap::DD_bootstrap_ctx::instance().is_server_upgrade());
+           bootstrap::DD_bootstrap_ctx::instance().is_server_upgrade() ||
+           bootstrap::DD_bootstrap_ctx::instance().is_dd_engine_change());
   }
 
   /*
@@ -1249,7 +1291,8 @@ bool initialize_dd_properties(THD *thd) {
     regarding the actual DD tables.
   */
   if (!bootstrap::DD_bootstrap_ctx::instance().is_initialize() &&
-      bootstrap::DD_bootstrap_ctx::instance().is_dd_upgrade() &&
+      (bootstrap::DD_bootstrap_ctx::instance().is_dd_upgrade() ||
+       bootstrap::DD_bootstrap_ctx::instance().is_dd_engine_change()) &&
       update_system_tables(thd)) {
     return true;
   }
@@ -1282,7 +1325,8 @@ bool create_tables(THD *thd, const std::set<String_type> *create_set) {
   if (bootstrap::DD_bootstrap_ctx::instance().get_stage() ==
           bootstrap::Stage::FETCHED_PROPERTIES &&
       (bootstrap::DD_bootstrap_ctx::instance().is_dd_upgrade() ||
-       bootstrap::DD_bootstrap_ctx::instance().is_minor_downgrade()))
+       bootstrap::DD_bootstrap_ctx::instance().is_minor_downgrade() ||
+       bootstrap::DD_bootstrap_ctx::instance().is_dd_engine_change()))
     create_target_tables = false;
 
   /*
@@ -1525,7 +1569,15 @@ bool sync_meta_data(THD *thd) {
     return true;
 
   // Reset the DDSE local dictionary cache.
-  handlerton *ddse = get_dd_engine(thd);
+  handlerton *ddse = nullptr;
+  if (opt_initialize) {
+    ddse = get_dd_engine(thd);
+  } else {
+    ddse = ha_resolve_by_legacy_type(
+        thd, bootstrap::DD_bootstrap_ctx::instance().get_actual_dd_engine()
+
+    );
+  }
   if (ddse->dict_cache_reset == nullptr) return true;
 
   for (System_tables::Const_iterator it = System_tables::instance()->begin();
@@ -1821,7 +1873,9 @@ bool update_versions(THD *thd, bool is_dd_upgrade_57) {
     do before committing.
   */
   handlerton *ddse = get_dd_engine(thd);
-  if (bootstrap::DD_bootstrap_ctx::instance().is_server_upgrade()) {
+  if (opt_initialize ||
+      bootstrap::DD_bootstrap_ctx::instance().is_server_upgrade() ||
+      bootstrap::DD_bootstrap_ctx::instance().is_dd_engine_change()) {
     if (ddse->dict_set_server_version == nullptr ||
         ddse->dict_set_server_version()) {
       LogErr(ERROR_LEVEL, ER_CANNOT_SET_SERVER_VERSION_IN_TABLESPACE_HEADER);

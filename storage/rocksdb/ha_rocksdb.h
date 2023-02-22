@@ -460,6 +460,7 @@ class ha_rocksdb : public my_core::handler, public blob_buffer {
                 HA_PRIMARY_KEY_REQUIRED_FOR_POSITION | HA_NULL_IN_KEY |
                 HA_PARTIAL_COLUMN_READ | HA_ONLINE_ANALYZE |
                 HA_GENERATED_COLUMNS | HA_CAN_INDEX_VIRTUAL_GENERATED_COLUMN |
+                HA_ATTACHABLE_TRX_COMPATIBLE | HA_DESCENDING_INDEX |
                 (rocksdb_column_default_value_as_expression
                      ? HA_SUPPORTS_DEFAULT_EXPRESSION
                      : 0) |

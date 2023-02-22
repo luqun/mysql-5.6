@@ -1860,6 +1860,8 @@ typedef bool (*ddse_dict_init_t)(
 */
 typedef void (*dict_register_dd_table_id_t)(dd::Object_id hard_coded_tables);
 
+typedef void (*dict_dict_dd_table_ids_reset_t)();
+
 /**
   Invalidate an entry in the local dictionary cache.
 
@@ -2614,6 +2616,7 @@ struct handlerton {
   dict_init_t dict_init;
   ddse_dict_init_t ddse_dict_init;
   dict_register_dd_table_id_t dict_register_dd_table_id;
+  dict_dict_dd_table_ids_reset_t dict_dd_table_ids_reset;
   dict_cache_reset_t dict_cache_reset;
   dict_cache_reset_tables_and_tablespaces_t
       dict_cache_reset_tables_and_tablespaces;

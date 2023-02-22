@@ -3429,6 +3429,8 @@ bool apply_dd_undo_state(space_id_t space_id, const dd::Tablespace *dd_space) {
 @param[in]	dd_table_id		Table id of DD table. */
 static void innobase_dict_register_dd_table_id(dd::Object_id dd_table_id);
 
+static void innobase_dict_dd_table_ids_reset();
+
 /** Validate the DD tablespace data against what's read during the
 directory scan on startup. */
 class Validate_files {
@@ -5239,6 +5241,7 @@ static int innodb_init(void *p) {
   innobase_hton->ddse_dict_init = innobase_ddse_dict_init;
 
   innobase_hton->dict_register_dd_table_id = innobase_dict_register_dd_table_id;
+  innobase_hton->dict_dd_table_ids_reset = innobase_dict_dd_table_ids_reset;
 
   innobase_hton->dict_cache_reset = innobase_dict_cache_reset;
   innobase_hton->dict_cache_reset_tables_and_tablespaces =
@@ -13038,6 +13041,10 @@ static bool innobase_ddse_dict_init(
 @param[in]	dd_table_id	 Table id of DD table. */
 static void innobase_dict_register_dd_table_id(dd::Object_id dd_table_id) {
   dict_sys_t::s_dd_table_ids.insert(dd_table_id);
+}
+
+static void innobase_dict_dd_table_ids_reset() {
+  dict_sys_t::s_dd_table_ids.clear();
 }
 
 /** Parse the table name into normal name and remote path if needed.
